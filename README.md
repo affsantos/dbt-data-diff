@@ -1,8 +1,8 @@
-# dbt Data Diff
+# dbt AI Data Diff
 
 Visual data diff for dbt + BigQuery. Compare production vs development data after model changes — right in your local dev loop or CI.
 
-![dbt Data Diff](examples/screenshot.png)
+![dbt AI Data Diff](examples/screenshot.png)
 
 ## Quick Start
 
@@ -11,9 +11,35 @@ dbt build --select my_model        # 1. Build your changes
 ./data-diff.sh my_model            # 2. See what changed → opens HTML report
 ```
 
-**Prerequisites**: dbt + BigQuery, `gcloud` authenticated, `bq`, `jq`, Python 3.11+ with `sqlglot`.
-
 Zero configuration — reads your GCP project, dbt project name, and schemas from the manifest automatically.
+
+## Setup
+
+**Python** (3.11+):
+```bash
+pip install sqlglot
+```
+
+**Google Cloud CLI** — needed for `bq` (BigQuery CLI):
+```bash
+# macOS
+brew install google-cloud-sdk
+
+# Or follow https://cloud.google.com/sdk/docs/install
+
+# Authenticate
+gcloud auth login
+gcloud auth application-default login
+```
+
+**jq**:
+```bash
+# macOS
+brew install jq
+
+# Ubuntu/Debian
+sudo apt-get install jq
+```
 
 ## What It Does
 
