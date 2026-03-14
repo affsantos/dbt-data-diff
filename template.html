@@ -478,6 +478,22 @@ h1 {
   background: var(--amber-dim);
   color: var(--amber);
 }
+.schema-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.schema-group__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
 
 /* ═══════════════ PROFILE TABLE ═══════════════ */
 .profile-wrap {
@@ -896,17 +912,43 @@ function renderModel(model, sectionIdx, animIdx) {
   }
   html += `</div>`;
 
-  // Schema changes
+  // Schema changes — grouped by type with clear headers
   if (model.schema_changes.length > 0) {
+    const added = model.schema_changes.filter(sc => sc.change_type === 'added');
+    const removed = model.schema_changes.filter(sc => sc.change_type === 'removed');
+    const typeChanged = model.schema_changes.filter(sc => sc.change_type === 'type_changed');
+
     html += `<div class="schema-changes">`;
-    model.schema_changes.forEach(sc => {
-      const cls = `schema-tag--${sc.change_type.replace('_', '-')}`;
-      const prefix = sc.change_type === 'added' ? '+ ' : sc.change_type === 'removed' ? '− ' : '↔ ';
-      let label = `${prefix}${sc.column}`;
-      if (sc.change_type === 'type_changed') label += ` (${sc.old_type} → ${sc.new_type})`;
-      else if (sc.new_type) label += ` : ${sc.new_type}`;
-      html += `<span class="schema-tag ${cls}">${esc(label)}</span>`;
-    });
+
+    if (removed.length > 0) {
+      html += `<div class="schema-group">`;
+      html += `<span class="schema-group__label">Columns removed</span>`;
+      removed.forEach(sc => {
+        html += `<span class="schema-tag schema-tag--removed">${esc(sc.column)}</span>`;
+      });
+      html += `</div>`;
+    }
+
+    if (added.length > 0) {
+      html += `<div class="schema-group">`;
+      html += `<span class="schema-group__label">Columns added</span>`;
+      added.forEach(sc => {
+        let label = sc.column;
+        if (sc.new_type) label += ` : ${sc.new_type}`;
+        html += `<span class="schema-tag schema-tag--added">${esc(label)}</span>`;
+      });
+      html += `</div>`;
+    }
+
+    if (typeChanged.length > 0) {
+      html += `<div class="schema-group">`;
+      html += `<span class="schema-group__label">Type changed</span>`;
+      typeChanged.forEach(sc => {
+        html += `<span class="schema-tag schema-tag--type-changed">${esc(sc.column)} (${esc(sc.old_type)} → ${esc(sc.new_type)})</span>`;
+      });
+      html += `</div>`;
+    }
+
     html += `</div>`;
   }
 
@@ -1156,22 +1198,40 @@ render();
     if (el) sections.push({ id, el, link });
   });
 
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        links.forEach(l => l.classList.remove('active'));
-        const match = sections.find(s => s.el === entry.target);
-        if (match) {
-          match.link.classList.add('active');
-          if (window.innerWidth <= 1000) {
-            match.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-          }
+  // Simple scroll spy: activate whichever section header is closest
+  // to the top of the viewport (but already scrolled past).
+  let active = null;
+
+  function updateSpy() {
+    let best = null;
+
+    // At bottom of page, always pick the last section
+    if ((window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 50)) {
+      best = sections[sections.length - 1];
+    } else {
+      // Pick the section whose header is closest to the top of the viewport
+      let bestDist = Infinity;
+      for (const s of sections) {
+        const dist = Math.abs(s.el.getBoundingClientRect().top);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = s;
         }
       }
-    });
-  }, { rootMargin: '-10% 0px -80% 0px' });
+    }
 
-  sections.forEach(s => observer.observe(s.el));
+    if (best && best !== active) {
+      active = best;
+      links.forEach(l => l.classList.remove('active'));
+      best.link.classList.add('active');
+      if (window.innerWidth <= 1000) {
+        best.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      }
+    }
+  }
+
+  window.addEventListener('scroll', updateSpy, { passive: true });
+  updateSpy();
 
   links.forEach(link => {
     link.addEventListener('click', e => {
