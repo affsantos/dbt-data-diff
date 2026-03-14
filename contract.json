@@ -1,0 +1,502 @@
+{
+  "metadata": {
+    "generated_at": "2026-03-14T14:32:00Z",
+    "git_branch": "feature/update-order-pricing",
+    "model_selector": "int_order_pricing int_product_inventory int_customer_segment",
+    "dbt_project": "my_project",
+    "gcp_project": "my-gcp-project-123",
+    "prod_schema_source": "target_prod/manifest.json",
+    "dev_schema": "dbt_dev"
+  },
+
+  "summary": {
+    "models_changed": 2,
+    "models_new": 1,
+    "total_row_delta": -340,
+    "total_row_delta_pct": -0.21,
+    "risk_indicators": [
+      {
+        "level": "warning",
+        "model": "int_order_pricing",
+        "message": "Row count decreased by 340 (-0.22%)"
+      },
+      {
+        "level": "warning",
+        "model": "int_order_pricing",
+        "message": "Null % for list_price changed from 77.35% to 77.12%"
+      }
+    ]
+  },
+
+  "models": [
+    {
+      "name": "int_order_pricing",
+      "layer": "intermediate",
+      "materialization": "view",
+      "prod_schema": "intermediate",
+      "prod_relation": "`my-gcp-project-123`.`intermediate`.`int_order_pricing`",
+      "dev_relation": "`my-gcp-project-123`.`dbt_dev`.`int_order_pricing`",
+      "is_new": false,
+      "primary_key": ["order_id"],
+
+      "row_count": {
+        "prod": 157427,
+        "dev": 157087,
+        "delta": -340,
+        "delta_pct": -0.22
+      },
+
+      "schema_changes": [],
+
+      "code_changes": {
+        "expression_changes": [
+          {
+            "column": "total_price_coalesced",
+            "prod_expression": "coalesce(li.list_price, cfg.base_price)",
+            "dev_expression": "coalesce(li.list_price, cfg.base_price, 0)"
+          }
+        ],
+        "cte_changes": [
+          {
+            "cte_name": "line_items",
+            "change_type": "modified"
+          }
+        ],
+        "has_indirect_changes": true
+      },
+
+      "column_profiles": [
+        {
+          "column": "order_id",
+          "data_type": "STRING",
+          "is_primary_key": true,
+          "is_changed": true,
+          "prod": {
+            "distinct_count": 157427,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          },
+          "dev": {
+            "distinct_count": 157087,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          }
+        },
+        {
+          "column": "product_id",
+          "data_type": "STRING",
+          "is_primary_key": false,
+          "is_changed": true,
+          "prod": {
+            "distinct_count": 6336,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          },
+          "dev": {
+            "distinct_count": 6331,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          }
+        },
+        {
+          "column": "base_price",
+          "data_type": "FLOAT64",
+          "is_primary_key": false,
+          "is_changed": true,
+          "prod": {
+            "distinct_count": 3471,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": 9.99,
+            "max": 4999.99,
+            "mean": 287.58
+          },
+          "dev": {
+            "distinct_count": 3468,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": 9.99,
+            "max": 4999.99,
+            "mean": 288.14
+          }
+        },
+        {
+          "column": "list_price",
+          "data_type": "FLOAT64",
+          "is_primary_key": false,
+          "is_changed": true,
+          "prod": {
+            "distinct_count": 3097,
+            "null_count": 121778,
+            "null_pct": 77.35,
+            "min": -1.0,
+            "max": 9999.99,
+            "mean": 342.32
+          },
+          "dev": {
+            "distinct_count": 3092,
+            "null_count": 121098,
+            "null_pct": 77.12,
+            "min": -1.0,
+            "max": 9999.99,
+            "mean": 343.47
+          }
+        },
+        {
+          "column": "total_price_coalesced",
+          "data_type": "FLOAT64",
+          "is_primary_key": false,
+          "is_changed": true,
+          "prod": {
+            "distinct_count": 6219,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": -1.0,
+            "max": 9999.99,
+            "mean": 301.85
+          },
+          "dev": {
+            "distinct_count": 6215,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": 0.0,
+            "max": 9999.99,
+            "mean": 299.22
+          }
+        }
+      ],
+
+      "sample_rows": {
+        "added": [],
+        "removed": [
+          {
+            "order_id": "ord-0041f2a3",
+            "product_id": "prod-88421",
+            "base_price": 249.99,
+            "list_price": null,
+            "total_price_coalesced": 249.99
+          },
+          {
+            "order_id": "ord-0093bc12",
+            "product_id": "prod-91023",
+            "base_price": 189.50,
+            "list_price": null,
+            "total_price_coalesced": 189.50
+          },
+          {
+            "order_id": "ord-00a1d4e8",
+            "product_id": "prod-73241",
+            "base_price": 129.99,
+            "list_price": 139.99,
+            "total_price_coalesced": 139.99
+          }
+        ],
+        "modified": [
+          {
+            "primary_key": { "order_id": "ord-1102ab3f" },
+            "changes": {
+              "total_price_coalesced": {
+                "prod": null,
+                "dev": 0.0
+              }
+            }
+          },
+          {
+            "primary_key": { "order_id": "ord-2204cd5e" },
+            "changes": {
+              "total_price_coalesced": {
+                "prod": null,
+                "dev": 0.0
+              }
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "name": "int_product_inventory",
+      "layer": "intermediate",
+      "materialization": "view",
+      "prod_schema": "intermediate",
+      "prod_relation": "`my-gcp-project-123`.`intermediate`.`int_product_inventory`",
+      "dev_relation": "`my-gcp-project-123`.`dbt_dev`.`int_product_inventory`",
+      "is_new": false,
+      "primary_key": ["product_id"],
+
+      "row_count": {
+        "prod": 2907,
+        "dev": 2907,
+        "delta": 0,
+        "delta_pct": 0.0
+      },
+
+      "schema_changes": [
+        {
+          "column": "reorder_threshold",
+          "change_type": "added",
+          "old_type": null,
+          "new_type": "INT64"
+        }
+      ],
+
+      "code_changes": {
+        "expression_changes": [],
+        "cte_changes": [],
+        "has_indirect_changes": false
+      },
+
+      "column_profiles": [
+        {
+          "column": "product_id",
+          "data_type": "STRING",
+          "is_primary_key": true,
+          "is_changed": false,
+          "prod": {
+            "distinct_count": 2907,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          },
+          "dev": {
+            "distinct_count": 2907,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          }
+        },
+        {
+          "column": "warehouse_id",
+          "data_type": "STRING",
+          "is_primary_key": false,
+          "is_changed": false,
+          "prod": {
+            "distinct_count": 12,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          },
+          "dev": {
+            "distinct_count": 12,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          }
+        },
+        {
+          "column": "quantity_on_hand",
+          "data_type": "INT64",
+          "is_primary_key": false,
+          "is_changed": false,
+          "prod": {
+            "distinct_count": 487,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": 0,
+            "max": 10000,
+            "mean": 342.7
+          },
+          "dev": {
+            "distinct_count": 487,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": 0,
+            "max": 10000,
+            "mean": 342.7
+          }
+        },
+        {
+          "column": "last_restocked_at",
+          "data_type": "TIMESTAMP",
+          "is_primary_key": false,
+          "is_changed": false,
+          "prod": {
+            "distinct_count": 2907,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": "2024-11-06T15:04:16",
+            "max": "2026-03-13T23:40:44",
+            "mean": null
+          },
+          "dev": {
+            "distinct_count": 2907,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": "2024-11-06T15:04:16",
+            "max": "2026-03-13T23:40:44",
+            "mean": null
+          }
+        },
+        {
+          "column": "reorder_threshold",
+          "data_type": "INT64",
+          "is_primary_key": false,
+          "is_changed": true,
+          "is_schema_addition": true,
+          "prod": null,
+          "dev": {
+            "distinct_count": 4,
+            "null_count": 1203,
+            "null_pct": 41.38,
+            "min": 10,
+            "max": 500,
+            "mean": 127.5
+          }
+        }
+      ],
+
+      "sample_rows": {
+        "added": [],
+        "removed": [],
+        "modified": []
+      }
+    },
+
+    {
+      "name": "int_customer_segment",
+      "layer": "intermediate",
+      "materialization": "view",
+      "prod_schema": null,
+      "prod_relation": null,
+      "dev_relation": "`my-gcp-project-123`.`dbt_dev`.`int_customer_segment`",
+      "is_new": true,
+      "primary_key": ["customer_id"],
+
+      "row_count": {
+        "prod": null,
+        "dev": 143892,
+        "delta": null,
+        "delta_pct": null
+      },
+
+      "schema_changes": [],
+      "code_changes": null,
+
+      "column_profiles": [
+        {
+          "column": "customer_id",
+          "data_type": "STRING",
+          "is_primary_key": true,
+          "is_changed": false,
+          "prod": null,
+          "dev": {
+            "distinct_count": 143892,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          }
+        },
+        {
+          "column": "email",
+          "data_type": "STRING",
+          "is_primary_key": false,
+          "is_changed": false,
+          "prod": null,
+          "dev": {
+            "distinct_count": 140211,
+            "null_count": 3681,
+            "null_pct": 2.56,
+            "min": null,
+            "max": null,
+            "mean": null
+          }
+        },
+        {
+          "column": "segment",
+          "data_type": "STRING",
+          "is_primary_key": false,
+          "is_changed": false,
+          "prod": null,
+          "dev": {
+            "distinct_count": 5,
+            "null_count": 0,
+            "null_pct": 0.0,
+            "min": null,
+            "max": null,
+            "mean": null
+          }
+        },
+        {
+          "column": "first_order_at",
+          "data_type": "TIMESTAMP",
+          "is_primary_key": false,
+          "is_changed": false,
+          "prod": null,
+          "dev": {
+            "distinct_count": 98421,
+            "null_count": 45471,
+            "null_pct": 31.6,
+            "min": "2022-01-15T08:21:00",
+            "max": "2026-03-14T07:45:12",
+            "mean": null
+          }
+        },
+        {
+          "column": "country",
+          "data_type": "STRING",
+          "is_primary_key": false,
+          "is_changed": false,
+          "prod": null,
+          "dev": {
+            "distinct_count": 3,
+            "null_count": 812,
+            "null_pct": 0.56,
+            "min": null,
+            "max": null,
+            "mean": null
+          }
+        }
+      ],
+
+      "sample_rows": {
+        "added": [
+          {
+            "customer_id": "cust-a001b2c3",
+            "email": "alice@example.com",
+            "segment": "enterprise",
+            "first_order_at": "2026-03-12T14:22:00",
+            "country": "US"
+          },
+          {
+            "customer_id": "cust-d004e5f6",
+            "email": "bob@example.com",
+            "segment": "startup",
+            "first_order_at": null,
+            "country": "US"
+          },
+          {
+            "customer_id": "cust-g007h8i9",
+            "email": null,
+            "segment": "unknown",
+            "first_order_at": null,
+            "country": null
+          }
+        ],
+        "removed": [],
+        "modified": []
+      }
+    }
+  ]
+}

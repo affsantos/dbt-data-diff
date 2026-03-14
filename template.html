@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dbt Data Diff</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════ THEME ═══════════════ */
+:root {
+  --font-body: 'DM Sans', system-ui, sans-serif;
+  --font-mono: 'Fira Code', 'SF Mono', Consolas, monospace;
+
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --surface-elevated: #ffffff;
+  --surface-recessed: #f4f5f7;
+  --border: rgba(0, 0, 0, 0.07);
+  --border-bright: rgba(0, 0, 0, 0.13);
+  --text: #1a1d23;
+  --text-dim: #6b7280;
+  --text-faint: #9ca3af;
+
+  --green: #059669;
+  --green-dim: rgba(5, 150, 105, 0.08);
+  --green-bg: rgba(5, 150, 105, 0.05);
+  --red: #dc2626;
+  --red-dim: rgba(220, 38, 38, 0.08);
+  --red-bg: rgba(220, 38, 38, 0.04);
+  --amber: #d97706;
+  --amber-dim: rgba(217, 119, 6, 0.08);
+  --blue: #2563eb;
+  --blue-dim: rgba(37, 99, 235, 0.08);
+  --teal: #0891b2;
+  --teal-dim: rgba(8, 145, 178, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface-2: #22262f;
+    --surface-elevated: #1e222c;
+    --surface-recessed: #151820;
+    --border: rgba(255, 255, 255, 0.06);
+    --border-bright: rgba(255, 255, 255, 0.12);
+    --text: #e5e7eb;
+    --text-dim: #9ca3af;
+    --text-faint: #6b7280;
+
+    --green: #34d399;
+    --green-dim: rgba(52, 211, 153, 0.1);
+    --green-bg: rgba(52, 211, 153, 0.05);
+    --red: #f87171;
+    --red-dim: rgba(248, 113, 113, 0.1);
+    --red-bg: rgba(248, 113, 113, 0.05);
+    --amber: #fbbf24;
+    --amber-dim: rgba(251, 191, 36, 0.1);
+    --blue: #60a5fa;
+    --blue-dim: rgba(96, 165, 250, 0.1);
+    --teal: #22d3ee;
+    --teal-dim: rgba(34, 211, 238, 0.1);
+  }
+}
+
+/* ═══════════════ RESET ═══════════════ */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  background-image:
+    radial-gradient(ellipse at 25% 0%, var(--teal-dim) 0%, transparent 50%),
+    radial-gradient(ellipse at 75% 100%, var(--green-dim) 0%, transparent 40%);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.55;
+  padding: 32px 40px;
+  min-height: 100vh;
+}
+
+/* ═══════════════ ANIMATIONS ═══════════════ */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeScale {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.anim {
+  animation: fadeUp 0.35s ease-out both;
+  animation-delay: calc(var(--i, 0) * 0.05s);
+}
+.anim-scale {
+  animation: fadeScale 0.3s ease-out both;
+  animation-delay: calc(var(--i, 0) * 0.05s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ═══════════════ LAYOUT — NAV + MAIN ═══════════════ */
+.wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 0 36px;
+}
+.main { min-width: 0; }
+
+/* ═══════════════ TOC NAV ═══════════════ */
+.toc {
+  position: sticky;
+  top: 24px;
+  align-self: start;
+  padding: 14px 0;
+  grid-row: 1 / -1;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+}
+.toc::-webkit-scrollbar { width: 3px; }
+.toc::-webkit-scrollbar-thumb { background: var(--surface-2); border-radius: 2px; }
+
+.toc-title {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  padding: 0 0 10px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.toc a {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border-left: 2px solid transparent;
+  transition: all 0.15s;
+  line-height: 1.4;
+  margin-bottom: 1px;
+}
+.toc a:hover { color: var(--text); background: var(--surface-2); }
+.toc a.active { color: var(--text); border-left-color: var(--teal); }
+
+@media (max-width: 1000px) {
+  .wrap { grid-template-columns: 1fr; padding-top: 0; }
+  body { padding-top: 0; }
+  .toc {
+    position: sticky; top: 0; z-index: 200;
+    max-height: none; display: flex; gap: 4px;
+    align-items: center; overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--bg); border-bottom: 1px solid var(--border);
+    padding: 10px 0; margin: 0 -40px;
+    padding-left: 40px; padding-right: 40px;
+    grid-row: auto;
+  }
+  .toc::-webkit-scrollbar { display: none; }
+  .toc-title { display: none; }
+  .toc a {
+    white-space: nowrap; flex-shrink: 0;
+    border-left: none; border-bottom: 2px solid transparent;
+    border-radius: 4px 4px 0 0; padding: 6px 10px; font-size: 10px;
+  }
+  .toc a.active { border-left: none; border-bottom-color: var(--teal); background: var(--surface); }
+  .main { padding-top: 20px; }
+  .sec-head { scroll-margin-top: 52px; }
+}
+
+/* ═══════════════ TYPOGRAPHY ═══════════════ */
+h1 {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 4px;
+}
+.subtitle {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 28px;
+}
+.sec-head {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  padding: 20px 0 12px;
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sec-head .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block;
+}
+
+/* ═══════════════ KPI CARDS ═══════════════ */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.kpi__val {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.kpi__val--green { color: var(--green); }
+.kpi__val--red { color: var(--red); }
+.kpi__val--amber { color: var(--amber); }
+.kpi__val--teal { color: var(--teal); }
+.kpi__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+
+/* ═══════════════ RISK INDICATORS ═══════════════ */
+.risks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 24px;
+}
+.risk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border-left: 3px solid;
+}
+.risk--warning {
+  background: var(--amber-dim);
+  border-left-color: var(--amber);
+  color: var(--text);
+}
+.risk--error {
+  background: var(--red-dim);
+  border-left-color: var(--red);
+  color: var(--text);
+}
+.risk__icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.risk__model {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+/* ═══════════════ MODEL CARD ═══════════════ */
+.model-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+.model-card--new {
+  border-color: var(--green);
+  border-width: 1px;
+}
+
+.model-header {
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.model-name {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.badge--layer {
+  background: var(--teal-dim);
+  color: var(--teal);
+}
+.badge--mat {
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+.badge--new {
+  background: var(--green-dim);
+  color: var(--green);
+}
+.badge--pk {
+  background: var(--blue-dim);
+  color: var(--blue);
+}
+
+.model-body {
+  padding: 18px 22px;
+}
+
+/* ═══════════════ ROW COUNT BAR ═══════════════ */
+.row-count {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.row-count__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  min-width: 72px;
+}
+.row-count__val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.row-count__arrow {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.row-count__delta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.row-count__delta--neg {
+  background: var(--red-dim);
+  color: var(--red);
+}
+.row-count__delta--pos {
+  background: var(--green-dim);
+  color: var(--green);
+}
+.row-count__delta--zero {
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+
+/* ═══════════════ CODE CHANGES ═══════════════ */
+.code-changes {
+  margin-bottom: 16px;
+}
+.code-change-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.code-change-banner--indirect {
+  background: var(--amber-dim);
+  border: 1px solid rgba(217, 119, 6, 0.15);
+  color: var(--text);
+}
+.code-change-banner__icon { font-size: 14px; flex-shrink: 0; }
+
+.expr-change {
+  background: var(--surface-recessed);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.expr-change__col {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--teal);
+  margin-bottom: 6px;
+}
+.expr-change__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 3px;
+}
+.expr-change__label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 32px;
+  flex-shrink: 0;
+}
+.expr-change__label--prod { color: var(--red); }
+.expr-change__label--dev { color: var(--green); }
+.expr-change__code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+/* ═══════════════ SCHEMA CHANGES ═══════════════ */
+.schema-changes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.schema-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+.schema-tag--added {
+  background: var(--green-dim);
+  color: var(--green);
+}
+.schema-tag--removed {
+  background: var(--red-dim);
+  color: var(--red);
+}
+.schema-tag--type-changed {
+  background: var(--amber-dim);
+  color: var(--amber);
+}
+
+/* ═══════════════ PROFILE TABLE ═══════════════ */
+.profile-wrap {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.profile-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.profile-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.profile-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.profile-table th {
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 2px solid var(--border-bright);
+  white-space: nowrap;
+}
+.profile-table th.num { text-align: right; }
+.profile-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+.profile-table tbody tr:last-child td { border-bottom: none; }
+.profile-table tbody tr:nth-child(even) { background: var(--surface-recessed); }
+.profile-table tbody tr { transition: background 0.12s; }
+.profile-table tbody tr:hover { background: var(--teal-dim); }
+
+.profile-table td.num { text-align: right; }
+.profile-table td.col-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Changed row highlight */
+.profile-table tr.row-changed {
+  background: var(--amber-dim);
+}
+.profile-table tr.row-changed:hover {
+  background: rgba(217, 119, 6, 0.14);
+}
+.profile-table tr.row-new {
+  background: var(--green-bg);
+}
+.profile-table tr.row-new:hover {
+  background: rgba(5, 150, 105, 0.1);
+}
+
+/* Inline delta */
+.delta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 4px;
+}
+.delta--pos { color: var(--green); }
+.delta--neg { color: var(--red); }
+.delta--zero { color: var(--text-faint); }
+
+/* Status dot */
+.status-dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.status-dot--changed { background: var(--amber); }
+.status-dot--same { background: var(--green); }
+.status-dot--new { background: var(--teal); }
+.status-dot--pk { background: var(--blue); }
+.status-dot--added { background: var(--green); }
+
+.cell-pair {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.cell-pair__prod { color: var(--text-dim); }
+.cell-pair__arrow { color: var(--text-faint); font-size: 9px; }
+.cell-pair__dev { font-weight: 600; }
+.cell-na { color: var(--text-faint); font-style: italic; font-size: 11px; }
+
+/* ═══════════════ SAMPLE ROWS (collapsible) ═══════════════ */
+details.samples {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+details.samples summary {
+  padding: 10px 16px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  transition: background 0.12s;
+}
+details.samples summary:hover { background: var(--surface-2); }
+details.samples summary::-webkit-details-marker { display: none; }
+details.samples summary::before {
+  content: '▸'; font-size: 10px; color: var(--text-dim);
+  transition: transform 0.15s;
+}
+details.samples[open] summary::before { transform: rotate(90deg); }
+
+.samples__body {
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+.samples__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  margin-top: 12px;
+}
+.samples__label:first-child { margin-top: 0; }
+
+.samples-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  margin-bottom: 12px;
+}
+.samples-table th {
+  background: var(--surface-2);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  text-align: left;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.samples-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.samples-table tr:last-child td { border-bottom: none; }
+.samples-table .val-null { color: var(--text-faint); font-style: italic; }
+.samples-table .val-changed { background: var(--amber-dim); }
+
+/* ═══════════════ FOOTER ═══════════════ */
+.page-footer {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ═══════════════ UTILITY ═══════════════ */
+.mt-0 { margin-top: 0; }
+.mb-8 { margin-bottom: 8px; }
+.empty-msg {
+  color: var(--text-faint);
+  font-size: 12px;
+  font-style: italic;
+  padding: 8px 0;
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <nav class="toc" id="toc"></nav>
+  <div class="main" id="main"></div>
+</div>
+
+<script>
+// ─── DATA INJECTION POINT ───────────────────────────────────────
+// In production, the bash script replaces this line via sed.
+// For development, the contract.json sample data is embedded below.
+const DATA = __DATA_PLACEHOLDER__;
+
+// ─── HELPERS ────────────────────────────────────────────────────
+const fmt = (n, decimals = 0) => {
+  if (n == null) return '—';
+  return Number(n).toLocaleString('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  });
+};
+
+const fmtPct = (n) => {
+  if (n == null) return '—';
+  return Number(n).toFixed(2) + '%';
+};
+
+const fmtDelta = (val) => {
+  if (val == null) return '';
+  const sign = val > 0 ? '+' : '';
+  return sign + fmt(val);
+};
+
+const fmtDeltaPct = (val) => {
+  if (val == null) return '';
+  const sign = val > 0 ? '+' : '';
+  return sign + Number(val).toFixed(2) + '%';
+};
+
+const deltaClass = (val) => {
+  if (val == null || val === 0) return 'delta--zero';
+  return val > 0 ? 'delta--pos' : 'delta--neg';
+};
+
+const rowDeltaClass = (val) => {
+  if (val == null || val === 0) return 'row-count__delta--zero';
+  return val > 0 ? 'row-count__delta--pos' : 'row-count__delta--neg';
+};
+
+const esc = (s) => {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+};
+
+const cellVal = (v) => {
+  if (v === null || v === undefined) return '<span class="val-null">null</span>';
+  return esc(v);
+};
+
+const profileCellPair = (prod, dev, decimals = 0) => {
+  if (prod == null && dev == null) return '<span class="cell-na">—</span>';
+  if (prod == null) return `<span class="cell-pair__dev">${fmt(dev, decimals)}</span>`;
+  if (dev == null) return `<span class="cell-pair__prod">${fmt(prod, decimals)}</span>`;
+  if (prod === dev) return `<span>${fmt(prod, decimals)}</span>`;
+  const d = dev - prod;
+  return `<span class="cell-pair">
+    <span class="cell-pair__prod">${fmt(prod, decimals)}</span>
+    <span class="cell-pair__arrow">→</span>
+    <span class="cell-pair__dev">${fmt(dev, decimals)}</span>
+    <span class="delta ${deltaClass(d)}">${fmtDelta(d)}</span>
+  </span>`;
+};
+
+const profileCellPairPct = (prod, dev) => {
+  if (prod == null && dev == null) return '<span class="cell-na">—</span>';
+  if (prod == null) return `<span class="cell-pair__dev">${fmtPct(dev)}</span>`;
+  if (dev == null) return `<span class="cell-pair__prod">${fmtPct(prod)}</span>`;
+  if (prod === dev) return `<span>${fmtPct(prod)}</span>`;
+  const d = dev - prod;
+  return `<span class="cell-pair">
+    <span class="cell-pair__prod">${fmtPct(prod)}</span>
+    <span class="cell-pair__arrow">→</span>
+    <span class="cell-pair__dev">${fmtPct(dev)}</span>
+    <span class="delta ${deltaClass(d)}">${fmtDeltaPct(d)}</span>
+  </span>`;
+};
+
+const profileCellPairRaw = (prod, dev) => {
+  if (prod == null && dev == null) return '<span class="cell-na">—</span>';
+  const pStr = prod != null ? esc(prod) : '—';
+  const dStr = dev != null ? esc(dev) : '—';
+  if (prod == null) return `<span class="cell-pair__dev">${dStr}</span>`;
+  if (dev == null) return `<span class="cell-pair__prod">${pStr}</span>`;
+  if (String(prod) === String(dev)) return `<span>${pStr}</span>`;
+  return `<span class="cell-pair">
+    <span class="cell-pair__prod">${pStr}</span>
+    <span class="cell-pair__arrow">→</span>
+    <span class="cell-pair__dev">${dStr}</span>
+  </span>`;
+};
+
+// ─── RENDER: TOC ────────────────────────────────────────────────
+function renderToc() {
+  const toc = document.getElementById('toc');
+  let html = '<div class="toc-title">Data Diff</div>';
+  html += '<a href="#s-summary">Summary</a>';
+  DATA.models.forEach((m, i) => {
+    const label = m.is_new ? `✚ ${m.name}` : m.name;
+    html += `<a href="#s-model-${i}">${esc(label)}</a>`;
+  });
+  toc.innerHTML = html;
+}
+
+// ─── RENDER: SUMMARY ───────────────────────────────────────────
+function renderSummary() {
+  const s = DATA.summary;
+  const m = DATA.metadata;
+  let animIdx = 0;
+
+  let html = '';
+  html += `<h1 class="anim" style="--i:${animIdx++}">dbt Data Diff</h1>`;
+  html += `<p class="subtitle anim" style="--i:${animIdx++}">`;
+  html += `Branch: <strong>${esc(m.git_branch)}</strong> · `;
+  html += `${esc(m.model_selector)} · `;
+  html += `${new Date(m.generated_at).toLocaleString()}`;
+  html += `</p>`;
+
+  // KPIs
+  html += `<div class="kpi-row anim-scale" style="--i:${animIdx++}">`;
+  html += `<div class="kpi"><div class="kpi__val kpi__val--teal">${s.models_changed + s.models_new}</div><div class="kpi__label">Models Diffed</div></div>`;
+  html += `<div class="kpi"><div class="kpi__val">${s.models_changed}</div><div class="kpi__label">Modified</div></div>`;
+  html += `<div class="kpi"><div class="kpi__val kpi__val--green">${s.models_new}</div><div class="kpi__label">New</div></div>`;
+
+  const rdClass = s.total_row_delta > 0 ? 'kpi__val--green' : s.total_row_delta < 0 ? 'kpi__val--red' : '';
+  const rdSign = s.total_row_delta > 0 ? '+' : '';
+  html += `<div class="kpi"><div class="kpi__val ${rdClass}">${rdSign}${fmt(s.total_row_delta)}</div><div class="kpi__label">Row Delta</div></div>`;
+
+  const riCount = s.risk_indicators.length;
+  const riClass = riCount > 0 ? 'kpi__val--amber' : 'kpi__val--green';
+  html += `<div class="kpi"><div class="kpi__val ${riClass}">${riCount}</div><div class="kpi__label">Warnings</div></div>`;
+  html += `</div>`;
+
+  // Risk indicators
+  if (s.risk_indicators.length > 0) {
+    html += `<div class="risks anim" style="--i:${animIdx++}">`;
+    s.risk_indicators.forEach(r => {
+      const cls = r.level === 'error' ? 'risk--error' : 'risk--warning';
+      const icon = r.level === 'error' ? '🔴' : '⚠️';
+      html += `<div class="risk ${cls}">
+        <span class="risk__icon">${icon}</span>
+        <span class="risk__model">${esc(r.model)}</span>
+        <span>${esc(r.message)}</span>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  return { html, animIdx };
+}
+
+// ─── RENDER: MODEL CARD ────────────────────────────────────────
+function renderModel(model, sectionIdx, animIdx) {
+  let html = '';
+
+  // Section heading
+  const headColor = model.is_new ? 'var(--green)' : 'var(--teal)';
+  html += `<div id="s-model-${sectionIdx}" class="sec-head anim" style="--i:${animIdx++}">`;
+  html += `<span class="dot" style="background:${headColor}"></span>`;
+  html += model.is_new ? `New Model — ${esc(model.name)}` : esc(model.name);
+  html += `</div>`;
+
+  // Card
+  const cardCls = model.is_new ? 'model-card model-card--new' : 'model-card';
+  html += `<div class="${cardCls} anim" style="--i:${animIdx++}">`;
+
+  // Header
+  html += `<div class="model-header">`;
+  html += `<span class="model-name">${esc(model.name)}</span>`;
+  html += `<span class="badge badge--layer">${esc(model.layer)}</span>`;
+  html += `<span class="badge badge--mat">${esc(model.materialization)}</span>`;
+  if (model.is_new) html += `<span class="badge badge--new">NEW</span>`;
+  if (model.primary_key.length > 0) {
+    html += `<span class="badge badge--pk">PK: ${esc(model.primary_key.join(', '))}</span>`;
+  }
+  html += `</div>`;
+
+  // Body
+  html += `<div class="model-body">`;
+
+  // Row count
+  html += `<div class="row-count">`;
+  html += `<span class="row-count__label">Rows</span>`;
+  if (model.is_new) {
+    html += `<span class="row-count__val">${fmt(model.row_count.dev)}</span>`;
+    html += `<span class="badge badge--new" style="margin-left:4px">new</span>`;
+  } else {
+    html += `<span class="row-count__val">${fmt(model.row_count.prod)}</span>`;
+    html += `<span class="row-count__arrow">→</span>`;
+    html += `<span class="row-count__val">${fmt(model.row_count.dev)}</span>`;
+    if (model.row_count.delta !== 0) {
+      html += `<span class="row-count__delta ${rowDeltaClass(model.row_count.delta)}">`;
+      html += `${fmtDelta(model.row_count.delta)} (${fmtDeltaPct(model.row_count.delta_pct)})`;
+      html += `</span>`;
+    } else {
+      html += `<span class="row-count__delta row-count__delta--zero">no change</span>`;
+    }
+  }
+  html += `</div>`;
+
+  // Schema changes
+  if (model.schema_changes.length > 0) {
+    html += `<div class="schema-changes">`;
+    model.schema_changes.forEach(sc => {
+      const cls = `schema-tag--${sc.change_type.replace('_', '-')}`;
+      const prefix = sc.change_type === 'added' ? '+ ' : sc.change_type === 'removed' ? '− ' : '↔ ';
+      let label = `${prefix}${sc.column}`;
+      if (sc.change_type === 'type_changed') label += ` (${sc.old_type} → ${sc.new_type})`;
+      else if (sc.new_type) label += ` : ${sc.new_type}`;
+      html += `<span class="schema-tag ${cls}">${esc(label)}</span>`;
+    });
+    html += `</div>`;
+  }
+
+  // Code changes
+  if (model.code_changes) {
+    const cc = model.code_changes;
+    const hasAny = cc.expression_changes.length > 0 || cc.cte_changes.length > 0;
+    if (hasAny) {
+      html += `<div class="code-changes">`;
+
+      if (cc.has_indirect_changes && cc.cte_changes.length > 0) {
+        const cteNames = cc.cte_changes.map(c => c.cte_name).join(', ');
+        html += `<div class="code-change-banner code-change-banner--indirect">`;
+        html += `<span class="code-change-banner__icon">⚠️</span>`;
+        html += `<span>Upstream logic changed — CTE <strong>${esc(cteNames)}</strong> modified. All columns may be affected.</span>`;
+        html += `</div>`;
+      }
+
+      cc.expression_changes.forEach(ec => {
+        html += `<div class="expr-change">`;
+        html += `<div class="expr-change__col">⚡ ${esc(ec.column)}</div>`;
+        html += `<div class="expr-change__row"><span class="expr-change__label expr-change__label--prod">prod</span><code class="expr-change__code">${esc(ec.prod_expression)}</code></div>`;
+        html += `<div class="expr-change__row"><span class="expr-change__label expr-change__label--dev">dev</span><code class="expr-change__code">${esc(ec.dev_expression)}</code></div>`;
+        html += `</div>`;
+      });
+
+      html += `</div>`;
+    }
+  }
+
+  // Column profile table
+  const cols = model.column_profiles;
+  const isNew = model.is_new;
+  const hasNumeric = cols.some(c => {
+    const d = c.dev || c.prod;
+    return d && (d.min != null || d.max != null || d.mean != null);
+  });
+
+  html += `<div class="profile-wrap">`;
+  html += `<div class="profile-scroll">`;
+  html += `<table class="profile-table">`;
+  html += `<thead><tr>`;
+  html += `<th></th>`;
+  html += `<th>Column</th>`;
+  html += `<th>Type</th>`;
+  html += `<th class="num">Distinct</th>`;
+  html += `<th class="num">Null %</th>`;
+  if (hasNumeric) {
+    html += `<th class="num">Min</th>`;
+    html += `<th class="num">Max</th>`;
+    html += `<th class="num">Mean</th>`;
+  }
+  html += `</tr></thead>`;
+  html += `<tbody>`;
+
+  cols.forEach((col, ci) => {
+    const p = col.prod || {};
+    const d = col.dev || {};
+    let rowCls = '';
+    if (col.is_schema_addition) rowCls = 'row-new';
+    else if (col.is_changed) rowCls = 'row-changed';
+
+    // Status dot
+    let dotCls = 'status-dot--same';
+    let dotTitle = 'Unchanged';
+    if (col.is_primary_key) { dotCls = 'status-dot--pk'; dotTitle = 'Primary Key'; }
+    if (col.is_schema_addition) { dotCls = 'status-dot--added'; dotTitle = 'New Column'; }
+    else if (col.is_changed) { dotCls = 'status-dot--changed'; dotTitle = 'Data Changed'; }
+
+    html += `<tr class="${rowCls}" style="--i:${ci}">`;
+    html += `<td><span class="status-dot ${dotCls}" title="${dotTitle}"></span></td>`;
+    html += `<td class="col-name">${esc(col.column)}${col.is_primary_key ? ' 🔑' : ''}</td>`;
+    html += `<td><code style="font-size:10px;color:var(--text-dim)">${esc(col.data_type)}</code></td>`;
+
+    if (isNew) {
+      html += `<td class="num">${fmt(d.distinct_count)}</td>`;
+      html += `<td class="num">${fmtPct(d.null_pct)}</td>`;
+      if (hasNumeric) {
+        html += `<td class="num">${d.min != null ? fmt(d.min, 2) : '<span class="cell-na">—</span>'}</td>`;
+        html += `<td class="num">${d.max != null ? fmt(d.max, 2) : '<span class="cell-na">—</span>'}</td>`;
+        html += `<td class="num">${d.mean != null ? fmt(d.mean, 2) : '<span class="cell-na">—</span>'}</td>`;
+      }
+    } else if (col.is_schema_addition) {
+      html += `<td class="num">${fmt(d.distinct_count)}</td>`;
+      html += `<td class="num">${fmtPct(d.null_pct)}</td>`;
+      if (hasNumeric) {
+        html += `<td class="num">${d.min != null ? fmt(d.min, 2) : '<span class="cell-na">—</span>'}</td>`;
+        html += `<td class="num">${d.max != null ? fmt(d.max, 2) : '<span class="cell-na">—</span>'}</td>`;
+        html += `<td class="num">${d.mean != null ? fmt(d.mean, 2) : '<span class="cell-na">—</span>'}</td>`;
+      }
+    } else {
+      html += `<td class="num">${profileCellPair(p.distinct_count, d.distinct_count)}</td>`;
+      html += `<td class="num">${profileCellPairPct(p.null_pct, d.null_pct)}</td>`;
+      if (hasNumeric) {
+        html += `<td class="num">${profileCellPairRaw(p.min != null ? fmt(p.min, 2) : null, d.min != null ? fmt(d.min, 2) : null)}</td>`;
+        html += `<td class="num">${profileCellPairRaw(p.max != null ? fmt(p.max, 2) : null, d.max != null ? fmt(d.max, 2) : null)}</td>`;
+        html += `<td class="num">${profileCellPair(p.mean, d.mean, 2)}</td>`;
+      }
+    }
+
+    html += `</tr>`;
+  });
+
+  html += `</tbody></table></div></div>`;
+
+  // Sample rows
+  const sr = model.sample_rows;
+  const totalSamples = sr.added.length + sr.removed.length + sr.modified.length;
+  if (totalSamples > 0) {
+    html += `<details class="samples">`;
+    html += `<summary>Sample Rows · ${totalSamples} shown</summary>`;
+    html += `<div class="samples__body">`;
+
+    if (sr.added.length > 0) {
+      html += `<div class="samples__label" style="color:var(--green)">+ Added (${sr.added.length})</div>`;
+      html += renderSampleTable(sr.added);
+    }
+
+    if (sr.removed.length > 0) {
+      html += `<div class="samples__label" style="color:var(--red)">− Removed (${sr.removed.length})</div>`;
+      html += renderSampleTable(sr.removed);
+    }
+
+    if (sr.modified.length > 0) {
+      html += `<div class="samples__label" style="color:var(--amber)">~ Modified (${sr.modified.length})</div>`;
+      html += renderModifiedTable(sr.modified);
+    }
+
+    html += `</div></details>`;
+  }
+
+  html += `</div>`; // model-body
+  html += `</div>`; // model-card
+
+  return { html, animIdx };
+}
+
+function renderSampleTable(rows) {
+  if (rows.length === 0) return '';
+  const cols = Object.keys(rows[0]);
+  let html = `<table class="samples-table"><thead><tr>`;
+  cols.forEach(c => { html += `<th>${esc(c)}</th>`; });
+  html += `</tr></thead><tbody>`;
+  rows.forEach(row => {
+    html += `<tr>`;
+    cols.forEach(c => { html += `<td>${cellVal(row[c])}</td>`; });
+    html += `</tr>`;
+  });
+  html += `</tbody></table>`;
+  return html;
+}
+
+function renderModifiedTable(rows) {
+  if (rows.length === 0) return '';
+
+  // Handle two formats:
+  // 1. Rich format: {primary_key: {col: val}, changes: {col: {prod, dev}}}
+  // 2. Flat PK format from data-diff.sh: {col1: val1, col2: val2} (just PK values)
+  const isRichFormat = rows[0].primary_key !== undefined;
+
+  if (isRichFormat) {
+    const pkCols = Object.keys(rows[0].primary_key);
+    const changeCols = [...new Set(rows.flatMap(r => Object.keys(r.changes || {})))];
+
+    let html = `<table class="samples-table"><thead><tr>`;
+    pkCols.forEach(c => { html += `<th>${esc(c)} 🔑</th>`; });
+    changeCols.forEach(c => { html += `<th>${esc(c)}</th>`; });
+    html += `</tr></thead><tbody>`;
+    rows.forEach(row => {
+      html += `<tr>`;
+      pkCols.forEach(c => { html += `<td>${cellVal(row.primary_key[c])}</td>`; });
+      changeCols.forEach(c => {
+        const change = (row.changes || {})[c];
+        if (change) {
+          html += `<td class="val-changed">${cellVal(change.prod)} → ${cellVal(change.dev)}</td>`;
+        } else {
+          html += `<td>—</td>`;
+        }
+      });
+      html += `</tr>`;
+    });
+    html += `</tbody></table>`;
+    return html;
+  }
+
+  // Flat PK format — show modified primary key values
+  const cols = Object.keys(rows[0]);
+  let html = `<table class="samples-table"><thead><tr>`;
+  cols.forEach(c => { html += `<th>${esc(c)} 🔑</th>`; });
+  html += `</tr></thead><tbody>`;
+  rows.forEach(row => {
+    html += `<tr>`;
+    cols.forEach(c => { html += `<td>${cellVal(row[c])}</td>`; });
+    html += `</tr>`;
+  });
+  html += `</tbody></table>`;
+  return html;
+}
+
+// ─── RENDER: FOOTER ────────────────────────────────────────────
+function renderFooter(animIdx) {
+  const m = DATA.metadata;
+  return `<div class="page-footer anim" style="--i:${animIdx}">
+    <span>dbt data-diff · ${esc(m.dbt_project)} · ${esc(m.gcp_project)}</span>
+    <span>${new Date(m.generated_at).toLocaleString()}</span>
+  </div>`;
+}
+
+// ─── MAIN RENDER ───────────────────────────────────────────────
+function render() {
+  renderToc();
+
+  const main = document.getElementById('main');
+  let html = '';
+  let animIdx = 0;
+
+  // Summary section
+  html += `<div id="s-summary"></div>`;
+  const summary = renderSummary();
+  html += summary.html;
+  animIdx = summary.animIdx;
+
+  // Model cards
+  DATA.models.forEach((model, i) => {
+    const result = renderModel(model, i, animIdx);
+    html += result.html;
+    animIdx = result.animIdx;
+  });
+
+  // Footer
+  html += renderFooter(animIdx);
+
+  main.innerHTML = html;
+}
+
+render();
+
+// ─── SCROLL SPY ────────────────────────────────────────────────
+(function() {
+  const toc = document.getElementById('toc');
+  const links = toc.querySelectorAll('a');
+  const sections = [];
+
+  links.forEach(link => {
+    const id = link.getAttribute('href').slice(1);
+    const el = document.getElementById(id);
+    if (el) sections.push({ id, el, link });
+  });
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const match = sections.find(s => s.el === entry.target);
+        if (match) {
+          match.link.classList.add('active');
+          if (window.innerWidth <= 1000) {
+            match.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+          }
+        }
+      }
+    });
+  }, { rootMargin: '-10% 0px -80% 0px' });
+
+  sections.forEach(s => observer.observe(s.el));
+
+  links.forEach(link => {
+    link.addEventListener('click', e => {
+      e.preventDefault();
+      const id = link.getAttribute('href').slice(1);
+      const el = document.getElementById(id);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        history.replaceState(null, '', '#' + id);
+      }
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

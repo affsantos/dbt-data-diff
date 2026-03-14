@@ -1,0 +1,56 @@
+# Example GitHub Actions workflow for dbt data diff.
+#
+# Add these steps to your existing dbt CI workflow, after dbt build
+# succeeds. The data diff is non-blocking (continue-on-error) so it
+# never prevents a PR from merging.
+#
+# Prerequisites:
+#   - GCP authentication (e.g. google-github-actions/auth)
+#   - Python + sqlglot installed
+#   - jq available (pre-installed on ubuntu runners)
+#   - target_prod/manifest.json and target/manifest.json exist
+
+name: dbt data diff (example)
+
+# This is a fragment — add these steps to your existing workflow.
+# The full workflow would include: checkout, python setup, dbt deps,
+# dbt build, etc.
+
+steps:
+  # ... your existing dbt build steps ...
+
+  - name: Run data diff
+    if: steps.changed-model-files.outputs.all_changed_files
+    continue-on-error: true
+    run: |
+      chmod +x ./data-diff.sh
+      ./data-diff.sh "${{ steps.changed-model-files.outputs.all_changed_files }}"
+
+  # Option A: Upload HTML as artifact (simplest)
+  - name: Upload data diff report
+    if: steps.changed-model-files.outputs.all_changed_files
+    continue-on-error: true
+    uses: actions/upload-artifact@v4
+    with:
+      name: data-diff-report
+      path: .data-diff/*.html
+      retention-days: 14
+
+  # Option B: Post Markdown summary as PR comment (requires --format markdown)
+  # - name: Post data diff to PR
+  #   if: steps.changed-model-files.outputs.all_changed_files
+  #   continue-on-error: true
+  #   uses: marocchino/sticky-pull-request-comment@v2
+  #   with:
+  #     header: data-diff
+  #     path: /tmp/data-diff-comment.md
+
+  # Option C: Upload to GCS and link from PR (best UX)
+  # - name: Upload data diff to GCS
+  #   if: steps.changed-model-files.outputs.all_changed_files
+  #   continue-on-error: true
+  #   run: |
+  #     PR_NUMBER="${{ github.event.pull_request.number }}"
+  #     HTML_FILE=$(ls .data-diff/*.html | head -1)
+  #     gsutil cp "$HTML_FILE" "gs://your-bucket/data-diff/pr-${PR_NUMBER}/$(basename $HTML_FILE)"
+  #     echo "Report: https://storage.googleapis.com/your-bucket/data-diff/pr-${PR_NUMBER}/$(basename $HTML_FILE)"
