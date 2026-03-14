@@ -9,7 +9,7 @@ description: >
 argument-hint: "<model_selector>"
 ---
 
-# dbt Data Diff
+# dbt AI Data Diff
 
 Compare production vs development data for modified dbt models and
 open an interactive HTML report in the browser.

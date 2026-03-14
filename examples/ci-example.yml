@@ -1,4 +1,4 @@
-# Example GitHub Actions workflow for dbt data diff.
+# Example GitHub Actions workflow for dbt AI data diff.
 #
 # Add these steps to your existing dbt CI workflow, after dbt build
 # succeeds. The data diff is non-blocking (continue-on-error) so it
@@ -10,7 +10,7 @@
 #   - jq available (pre-installed on ubuntu runners)
 #   - target_prod/manifest.json and target/manifest.json exist
 
-name: dbt data diff (example)
+name: dbt AI data diff (example)
 
 # This is a fragment — add these steps to your existing workflow.
 # The full workflow would include: checkout, python setup, dbt deps,

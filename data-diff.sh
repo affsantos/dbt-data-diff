@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════════════
-# dbt Data Diff — compare production vs development model data
+# dbt AI Data Diff — compare production vs development model data
 #
 # Usage:
 #   ./data-diff.sh <model_selector>

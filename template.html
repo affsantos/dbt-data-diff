@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>dbt Data Diff</title>
+<title>dbt AI Data Diff</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
@@ -807,7 +807,7 @@ function renderSummary() {
   let animIdx = 0;
 
   let html = '';
-  html += `<h1 class="anim" style="--i:${animIdx++}">dbt Data Diff</h1>`;
+  html += `<h1 class="anim" style="--i:${animIdx++}">dbt AI Data Diff</h1>`;
   html += `<p class="subtitle anim" style="--i:${animIdx++}">`;
   html += `Branch: <strong>${esc(m.git_branch)}</strong> · `;
   html += `${esc(m.model_selector)} · `;
@@ -1110,7 +1110,7 @@ function renderModifiedTable(rows) {
 function renderFooter(animIdx) {
   const m = DATA.metadata;
   return `<div class="page-footer anim" style="--i:${animIdx}">
-    <span>dbt data-diff · ${esc(m.dbt_project)} · ${esc(m.gcp_project)}</span>
+    <span>dbt ai data-diff · ${esc(m.dbt_project)} · ${esc(m.gcp_project)}</span>
     <span>${new Date(m.generated_at).toLocaleString()}</span>
   </div>`;
 }
