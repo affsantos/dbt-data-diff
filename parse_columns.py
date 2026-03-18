@@ -80,6 +80,7 @@ def strip_jinja(raw: str) -> str:
 # AST helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse(sql: str) -> exp.Expression:
     """Parse SQL with BigQuery dialect."""
     return sqlglot.parse_one(sql, dialect="bigquery")
@@ -124,9 +125,122 @@ def extract_ctes(parsed: exp.Expression) -> dict[str, str]:
     return ctes
 
 
+def _extract_cte_nodes(parsed: exp.Expression) -> dict[str, exp.Expression]:
+    """Extract CTE body AST nodes (not just SQL strings)."""
+    ctes: dict[str, exp.Expression] = {}
+    for cte in parsed.find_all(exp.CTE):
+        ctes[cte.alias] = cte.this
+    return ctes
+
+
+def is_cte_change_additive(
+    prod_body: exp.Expression,
+    dev_body: exp.Expression,
+) -> bool:
+    """Determine if a CTE modification is purely additive.
+
+    A CTE change is "additive" (safe for focused profiling) when:
+    - WHERE clause unchanged
+    - GROUP BY / HAVING unchanged
+    - All existing JOINs preserved (new JOINs may be added)
+    - New JOINs are LEFT/CROSS (can't filter rows)
+    - SELECT column expressions unchanged (columns may be added)
+
+    Returns True if the change is additive, False if it's structural
+    (could affect existing column data).
+    """
+    try:
+        # Compare WHERE
+        prod_where = prod_body.find(exp.Where)
+        dev_where = dev_body.find(exp.Where)
+        if not _clauses_match(prod_where, dev_where):
+            return False
+
+        # Compare GROUP BY
+        if not _clauses_match(prod_body.find(exp.Group), dev_body.find(exp.Group)):
+            return False
+
+        # Compare HAVING
+        if not _clauses_match(
+            prod_body.find(exp.Having), dev_body.find(exp.Having)
+        ):
+            return False
+
+        # Compare JOINs — all existing must be preserved, new must be LEFT/CROSS
+        prod_joins = [_norm(j.sql(dialect="bigquery")) for j in prod_body.find_all(exp.Join)]
+        dev_joins_nodes = list(dev_body.find_all(exp.Join))
+        dev_joins = [_norm(j.sql(dialect="bigquery")) for j in dev_joins_nodes]
+
+        if not all(pj in dev_joins for pj in prod_joins):
+            return False
+
+        new_join_nodes = [
+            j for j in dev_joins_nodes
+            if _norm(j.sql(dialect="bigquery")) not in prod_joins
+        ]
+        for j in new_join_nodes:
+            side = j.args.get("side", "")
+            kind = j.args.get("kind", "")
+            side_str = side if isinstance(side, str) else (side.name if side else "")
+            kind_str = kind if isinstance(kind, str) else (kind.name if kind else "")
+            # Only LEFT and CROSS joins are additive (can't remove existing rows)
+            if side_str.upper() not in ("LEFT", "") or kind_str.upper() == "CROSS":
+                continue
+            if side_str.upper() == "" and kind_str.upper() not in ("CROSS", ""):
+                return False
+
+        # Compare SELECT columns within the CTE (existing expressions unchanged).
+        # Use _norm_expr to handle alias changes (id → o.id) from added JOINs.
+        prod_cte_cols, _ = extract_columns(prod_body)
+        dev_cte_cols, _ = extract_columns(dev_body)
+        for col_name, prod_expr in prod_cte_cols.items():
+            dev_expr = dev_cte_cols.get(col_name)
+            if dev_expr is None:
+                return False  # column removed
+            if _norm_expr(prod_expr) != _norm_expr(dev_expr):
+                return False  # expression changed
+
+        return True
+    except Exception:
+        return False  # any error → assume structural (conservative)
+
+
+def _clauses_match(
+    prod_clause: exp.Expression | None,
+    dev_clause: exp.Expression | None,
+) -> bool:
+    """Check if two SQL clauses match (both None or same SQL)."""
+    if prod_clause is None and dev_clause is None:
+        return True
+    if prod_clause is None or dev_clause is None:
+        return False
+    return _norm(prod_clause.sql(dialect="bigquery")) == _norm(
+        dev_clause.sql(dialect="bigquery")
+    )
+
+
 def _norm(sql: str) -> str:
     """Normalise SQL for comparison (collapse whitespace, lowercase)."""
     return " ".join(sql.split()).strip().lower()
+
+
+def _norm_expr(expr_sql: str) -> str:
+    """Normalise a column expression for comparison.
+
+    Handles the common case where adding a JOIN forces table aliases
+    onto existing columns (e.g. ``id`` → ``o.id``).  For simple column
+    references, strips the table qualifier so they compare equal.
+    For complex expressions, falls back to standard normalisation.
+    """
+    normed = _norm(expr_sql)
+    # Simple column reference with optional table qualifier: "t.col" → "col"
+    parts = normed.rsplit(".", 1)
+    if len(parts) == 2:
+        table_part, col_part = parts
+        # Only strip if the table part looks like an alias (simple identifier)
+        if table_part.replace("`", "").isidentifier():
+            return col_part
+    return normed
 
 
 _JINJA_PLACEHOLDER = "__jinja_expr__"
@@ -145,6 +259,7 @@ def _has_jinja_artifacts(parsed: exp.Expression) -> bool:
 # ---------------------------------------------------------------------------
 # Model-level diff
 # ---------------------------------------------------------------------------
+
 
 def diff_model(
     model_name: str,
@@ -205,9 +320,7 @@ def diff_model(
         result["is_new"] = True
         result["columns"] = list(dev_columns.keys())
         if dev_has_star:
-            result["columns_note"] = (
-                "SELECT * detected — column list may be incomplete"
-            )
+            result["columns_note"] = "SELECT * detected — column list may be incomplete"
         result["code_changes"] = None
         return result
 
@@ -237,15 +350,20 @@ def diff_model(
         elif dev_expr is None:
             removed_columns.append(col)
         elif _norm(prod_expr) != _norm(dev_expr):
-            expression_changes.append({
-                "column": col,
-                "prod_expression": prod_expr,
-                "dev_expression": dev_expr,
-            })
+            expression_changes.append(
+                {
+                    "column": col,
+                    "prod_expression": prod_expr,
+                    "dev_expression": dev_expr,
+                }
+            )
 
     # -- CTE diff ------------------------------------------------------
     cte_changes: list[dict] = []
+    prod_cte_nodes = _extract_cte_nodes(prod_parsed)
+    dev_cte_nodes = _extract_cte_nodes(dev_parsed)
     all_ctes = sorted(set(prod_ctes) | set(dev_ctes))
+
     for cte_name in all_ctes:
         prod_body = prod_ctes.get(cte_name)
         dev_body = dev_ctes.get(cte_name)
@@ -255,14 +373,36 @@ def diff_model(
         elif dev_body is None:
             cte_changes.append({"cte_name": cte_name, "change_type": "removed"})
         elif _norm(prod_body) != _norm(dev_body):
-            cte_changes.append({"cte_name": cte_name, "change_type": "modified"})
+            # Determine if the modification is purely additive (safe for
+            # focused profiling) or structural (could affect existing data).
+            prod_node = prod_cte_nodes.get(cte_name)
+            dev_node = dev_cte_nodes.get(cte_name)
+            additive = (
+                prod_node is not None
+                and dev_node is not None
+                and is_cte_change_additive(prod_node, dev_node)
+            )
+            cte_changes.append({
+                "cte_name": cte_name,
+                "change_type": "modified",
+                "is_additive": additive,
+            })
 
     # -- Indirect changes flag -----------------------------------------
-    # True when a CTE was modified or removed, meaning data flowing
-    # through it may differ even if output column expressions are
-    # unchanged (e.g. WHERE / JOIN / filter changes).
+    # True when a CTE was modified (structurally, not just additive) or
+    # removed, meaning data flowing through it may differ even if output
+    # column expressions look unchanged.
+    # Additive CTE changes (new columns / LEFT JOINs only) are safe.
     has_indirect = any(
-        c["change_type"] in ("modified", "removed") for c in cte_changes
+        c["change_type"] == "removed"
+        or (c["change_type"] == "modified" and not c.get("is_additive", False))
+        for c in cte_changes
+    )
+
+    # Build affected_columns — the columns that need profiling.
+    # This is the union of added columns and columns whose expression changed.
+    affected_columns = sorted(
+        set(added_columns + [c["column"] for c in expression_changes])
     )
 
     result["is_new"] = False
@@ -272,14 +412,13 @@ def diff_model(
         "removed_columns": removed_columns,
         "cte_changes": cte_changes,
         "has_indirect_changes": has_indirect,
+        "affected_columns": affected_columns,
     }
 
     # -- Warnings ------------------------------------------------------
     warnings: list[str] = []
     if prod_has_star or dev_has_star:
-        warnings.append(
-            "SELECT * detected — column list may be incomplete"
-        )
+        warnings.append("SELECT * detected — column list may be incomplete")
     if used_compiled_fallback:
         warnings.append(
             "Dev side parsed from compiled SQL (raw_code had "
@@ -295,6 +434,7 @@ def diff_model(
 # ---------------------------------------------------------------------------
 # Manifest helpers
 # ---------------------------------------------------------------------------
+
 
 def _load_manifest(path: str) -> dict:
     """Load a dbt manifest.json."""
@@ -323,10 +463,7 @@ def _find_node(manifest: dict, model_name: str) -> dict | None:
     for node_key, node_val in manifest.get("nodes", {}).items():
         if not node_key.startswith("model."):
             continue
-        if (
-            node_val.get("alias") == model_name
-            or node_key.endswith(f".{model_name}")
-        ):
+        if node_val.get("alias") == model_name or node_key.endswith(f".{model_name}"):
             return node_val
 
     return None
@@ -347,6 +484,7 @@ def _compiled_path(project_root: Path, node: dict) -> Path | None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -397,11 +535,13 @@ def main() -> None:
     for model_name in model_names:
         dev_node = _find_node(dev_manifest, model_name)
         if dev_node is None:
-            results.append({
-                "model": model_name,
-                "code_changes": None,
-                "parse_error": f"model '{model_name}' not found in dev manifest",
-            })
+            results.append(
+                {
+                    "model": model_name,
+                    "code_changes": None,
+                    "parse_error": f"model '{model_name}' not found in dev manifest",
+                }
+            )
             continue
 
         dev_raw = dev_node.get("raw_code") or dev_node.get("raw_sql", "")
@@ -410,15 +550,11 @@ def main() -> None:
         if prod_manifest is not None:
             prod_node = _find_node(prod_manifest, model_name)
             if prod_node is not None:
-                prod_raw = prod_node.get("raw_code") or prod_node.get(
-                    "raw_sql", ""
-                )
+                prod_raw = prod_node.get("raw_code") or prod_node.get("raw_sql", "")
 
         compiled = _compiled_path(project_root, dev_node)
 
-        results.append(
-            diff_model(model_name, prod_raw, dev_raw, compiled)
-        )
+        results.append(diff_model(model_name, prod_raw, dev_raw, compiled))
 
     # Output ---------------------------------------------------------------
     json.dump(results, sys.stdout, indent=2)

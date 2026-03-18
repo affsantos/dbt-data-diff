@@ -9,6 +9,7 @@ Visual data diff for dbt + BigQuery. Compare production vs development data afte
 ```bash
 dbt build --select my_model        # 1. Build your changes
 ./data-diff.sh my_model            # 2. See what changed → opens HTML report
+./data-diff.sh --full my_model     # 3. (optional) Profile ALL columns
 ```
 
 Zero configuration — reads your GCP project, dbt project name, and schemas from the manifest automatically.
@@ -52,6 +53,14 @@ Compares your dev tables against production across three layers:
 | **Data diff** (BQ profiling) | Row counts, null %, distinct counts, min/max/mean | 1 query / model / env |
 
 The HTML report includes summary with risk indicators, per-model cards with column profiles (prod vs dev side-by-side), code diffs, and sample rows.
+
+### Focused Profiling
+
+By default, only **changed columns** are profiled — using sqlglot AST analysis to detect which columns were added or had their expressions modified. For wide models (100+ columns), this is dramatically faster.
+
+CTE modifications are classified as **additive** (new LEFT JOINs, new columns — safe for focused profiling) or **structural** (WHERE/filter/JOIN changes — falls back to full profiling automatically). The `EXCEPT DISTINCT` row comparison always covers all columns regardless.
+
+Use `--full` to force profiling of every column when needed.
 
 ## AI Agent Integration
 
