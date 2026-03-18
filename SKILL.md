@@ -48,10 +48,32 @@ Suggest running it when:
 
 # Multiple models
 .agents/skills/data-diff/data-diff.sh "int_order_pricing int_product_inventory"
+
+# Full profiling (all columns — slower but complete)
+.agents/skills/data-diff/data-diff.sh --full int_order_pricing
 ```
 
 The script prints progress to stderr and the output HTML file path to
 stdout.  It automatically opens the page in the browser on macOS.
+
+### Focused profiling (default)
+
+By default, data-diff only profiles **columns that changed** (added or
+expression-modified) using sqlglot analysis. This is dramatically faster
+for wide models (e.g. a 100+ column model profiling only the ~11 that
+changed).
+
+The EXCEPT DISTINCT row comparison still covers **all columns**, so data
+changes in non-profiled columns are still caught in the sample rows
+section.
+
+Fallback to full profiling happens automatically when:
+- sqlglot analysis fails or is unavailable
+- Only CTEs changed with no identifiable output column changes
+- The model is new (no production counterpart)
+
+Use `--full` to force profiling of all columns when you need complete
+statistical comparison (e.g. investigating indirect CTE changes).
 
 ### What happens under the hood
 
@@ -61,11 +83,12 @@ stdout.  It automatically opens the page in the browser on macOS.
 | 2. Code diff | sqlglot AST parse (local) | Free |
 | 3. Schema diff | `INFORMATION_SCHEMA` query | 1 fast query / model |
 | 4. Extract primary keys | Manifest parsing (local) | Free |
-| 5. Profile columns | BQ profiling query | 1 query / model / env |
-| 6. Sample rows | `EXCEPT DISTINCT` query | 1 query / model |
+| 5. Profile columns | BQ profiling query (focused: only changed cols) | 1 query / model / env |
+| 6. Sample rows | `EXCEPT DISTINCT` query (all columns) | 1 query / model |
 | 7–8. Assemble + render | JSON → HTML injection | Free |
 
-**Performance**: ~30–60 seconds for up to 5 models.
+**Performance**: ~30–60 seconds for up to 5 models. Focused profiling
+significantly speeds up wide models (100+ columns → only changed columns).
 
 ## Interpreting the Output
 

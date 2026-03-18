@@ -25,13 +25,24 @@ DIAGRAMS_DIR="${REPO_ROOT}/.data-diff"
 NUMERIC_TYPES="INT64|FLOAT64|NUMERIC|BIGNUMERIC|DECIMAL|BIGDECIMAL"
 
 # ── Parse arguments ─────────────────────────────────────────────
+PROFILE_MODE="focused"  # default: only profile affected columns
+
 if [[ $# -eq 0 ]]; then
-    echo "Usage: data-diff.sh <model_selector>" >&2
+    echo "Usage: data-diff.sh [--full] <model_selector>" >&2
+    echo "" >&2
+    echo "Options:" >&2
+    echo "  --full    Profile ALL columns (default: only changed columns)" >&2
     echo "" >&2
     echo "Examples:" >&2
     echo "  data-diff.sh int_order_pricing" >&2
     echo "  data-diff.sh \"int_order_pricing int_product_inventory\"" >&2
+    echo "  data-diff.sh --full int_order_pricing" >&2
     exit 1
+fi
+
+if [[ "$1" == "--full" ]]; then
+    PROFILE_MODE="full"
+    shift
 fi
 
 MODELS="$*"
@@ -195,6 +206,84 @@ else
     echo '{}' > "$TMPDIR/code_changes.json"
 fi
 
+# ── Helper: extract affected columns from code changes ──────────
+# Returns a newline-separated list of column names to profile,
+# or the literal string "ALL" if full profiling is needed.
+get_affected_columns() {
+    local model_base="$1"
+
+    # --full flag overrides focused profiling
+    if [[ "$PROFILE_MODE" == "full" ]]; then
+        echo "ALL"
+        return
+    fi
+
+    local code_file="$TMPDIR/code_changes.json"
+    if [[ ! -f "$code_file" || "$(cat "$code_file")" == "{}" ]]; then
+        echo "ALL"
+        return
+    fi
+
+    # Find this model in the code_changes array
+    local model_data
+    model_data=$(jq -r --arg m "$model_base" \
+        '.[] | select(.model == $m) // empty' "$code_file" 2>/dev/null)
+
+    if [[ -z "$model_data" ]]; then
+        echo "ALL"
+        return
+    fi
+
+    # New models always get full profiling
+    local is_new
+    is_new=$(echo "$model_data" | jq -r '.is_new // false')
+    if [[ "$is_new" == "true" ]]; then
+        echo "ALL"
+        return
+    fi
+
+    # No code_changes (parse failed) → full profiling
+    local code_changes
+    code_changes=$(echo "$model_data" | jq '.code_changes // empty')
+    if [[ -z "$code_changes" || "$code_changes" == "null" ]]; then
+        echo "ALL"
+        return
+    fi
+
+    # Get affected columns (added + expression_changes)
+    local affected
+    affected=$(echo "$code_changes" | jq -r '
+        .affected_columns // [] | .[]
+    ' 2>/dev/null)
+
+    local has_indirect
+    has_indirect=$(echo "$code_changes" | jq -r '.has_indirect_changes // false')
+
+    # If CTEs were structurally modified (not just additive changes)
+    # and we can't determine which columns are affected → full profiling.
+    if [[ "$has_indirect" == "true" ]]; then
+        if [[ -z "$affected" ]]; then
+            # CTE-only changes, no direct column changes → must profile all
+            echo "ALL"
+            return
+        fi
+        # CTE structural changes + direct column changes → full profiling
+        # for safety (the CTE change could affect existing columns too)
+        log "  $model_base: structural CTE changes → full profiling for safety"
+        echo "ALL"
+        return
+    fi
+
+    # If nothing changed at all (no columns, no CTEs) → profile all
+    # (defensive — shouldn't happen for a modified model)
+    if [[ -z "$affected" ]]; then
+        echo "ALL"
+        return
+    fi
+
+    echo "$affected"
+}
+
 # ═══════════════════════════════════════════════════════════════════
 # STEP 3: Schema diff via INFORMATION_SCHEMA
 # ═══════════════════════════════════════════════════════════════════
@@ -289,15 +378,31 @@ step "Step 5: Profile columns"
 build_profile_query() {
     local cols_json="$1"
     local table="$2"
+    local filter_file="${3:-}"  # optional: file with column names to profile (one per line)
 
     # Use python to build the query dynamically from column metadata
     "$PYTHON" -c "
 import json, sys
+
 cols = json.load(open('$cols_json'))
 NUMERIC = {'INT64','FLOAT64','NUMERIC','BIGNUMERIC','DECIMAL','BIGDECIMAL'}
+
+# Load column filter if provided
+filter_set = None
+filter_path = '$filter_file'
+if filter_path:
+    try:
+        with open(filter_path) as f:
+            filter_set = {line.strip() for line in f if line.strip()}
+    except FileNotFoundError:
+        pass
+
 parts = ['COUNT(*) AS _row_count']
 for c in cols:
     name = c['column_name']
+    # Skip columns not in filter (if a filter is active)
+    if filter_set is not None and name not in filter_set:
+        continue
     safe = name.replace('-','_')
     parts.append(f'COUNT(DISTINCT \`{name}\`) AS \`{safe}__distinct\`')
     parts.append(f'COUNTIF(\`{name}\` IS NULL) AS \`{safe}__nulls\`')
@@ -305,6 +410,7 @@ for c in cols:
         parts.append(f'MIN(\`{name}\`) AS \`{safe}__min\`')
         parts.append(f'MAX(\`{name}\`) AS \`{safe}__max\`')
         parts.append(f'ROUND(CAST(AVG(\`{name}\`) AS FLOAT64), 4) AS \`{safe}__mean\`')
+
 q = 'SELECT\n  ' + ',\n  '.join(parts) + f'\nFROM $table'
 print(q)
 "
@@ -322,13 +428,44 @@ for model_base in $MODEL_LIST; do
         log "$model_base: ⚠️  no columns found — skipping profile"
         echo '[]' > "$TMPDIR/models/${model_base}_profile_dev.json"
         echo '[]' > "$TMPDIR/models/${model_base}_profile_prod.json"
+        echo '"ALL"' > "$TMPDIR/models/${model_base}_profiled_cols.json"
         continue
+    fi
+
+    # Determine which columns to profile (focused vs full)
+    affected_cols=$(get_affected_columns "$model_base")
+    filter_file=""
+
+    if [[ "$affected_cols" == "ALL" ]]; then
+        log "$model_base: profiling ALL $col_count columns"
+        echo '"ALL"' > "$TMPDIR/models/${model_base}_profiled_cols.json"
+    else
+        # Write affected columns to a filter file
+        filter_file="$TMPDIR/models/${model_base}_col_filter.txt"
+        echo "$affected_cols" > "$filter_file"
+
+        # Also add columns from schema diff (new columns in schema that
+        # sqlglot might not have caught — e.g. from Jinja)
+        if [[ -f "$TMPDIR/models/${model_base}_schema_diff.json" ]]; then
+            jq -r '.[] | select(.change_type == "added") | .column' \
+                "$TMPDIR/models/${model_base}_schema_diff.json" 2>/dev/null \
+                >> "$filter_file" || true
+        fi
+
+        # Deduplicate
+        sort -u "$filter_file" -o "$filter_file"
+        affected_count=$(wc -l < "$filter_file" | tr -d ' ')
+        log "$model_base: focused profiling — $affected_count of $col_count columns"
+
+        # Save the list for HTML rendering
+        jq -R -s 'split("\n") | map(select(length > 0))' "$filter_file" \
+            > "$TMPDIR/models/${model_base}_profiled_cols.json"
     fi
 
     # Profile dev
     dev_table="\`${GCP_PROJECT}\`.\`${DEV_SCHEMA}\`.\`${model_base}\`"
-    dev_query=$(build_profile_query "$dev_cols_file" "$dev_table")
-    log "$model_base: profiling dev ($col_count columns)..."
+    dev_query=$(build_profile_query "$dev_cols_file" "$dev_table" "$filter_file")
+    log "$model_base: profiling dev..."
     bq query --use_legacy_sql=false --format=json "$dev_query" 2>/dev/null \
         > "$TMPDIR/models/${model_base}_profile_dev.json" \
         || echo '[{}]' > "$TMPDIR/models/${model_base}_profile_dev.json"
@@ -340,8 +477,8 @@ for model_base in $MODEL_LIST; do
 
         if [[ "$prod_col_count" -gt 0 ]]; then
             prod_table="\`${GCP_PROJECT}\`.\`${prod_schema}\`.\`${model_base}\`"
-            prod_query=$(build_profile_query "$prod_cols_file" "$prod_table")
-            log "$model_base: profiling prod ($prod_col_count columns)..."
+            prod_query=$(build_profile_query "$prod_cols_file" "$prod_table" "$filter_file")
+            log "$model_base: profiling prod..."
             bq query --use_legacy_sql=false --format=json "$prod_query" 2>/dev/null \
                 > "$TMPDIR/models/${model_base}_profile_prod.json" \
                 || echo '[{}]' > "$TMPDIR/models/${model_base}_profile_prod.json"
@@ -375,6 +512,7 @@ for model_base in $MODEL_LIST; do
             || echo '[]' > "$TMPDIR/models/${model_base}_rows_added.json"
         echo '[]' > "$TMPDIR/models/${model_base}_rows_removed.json"
         echo '[]' > "$TMPDIR/models/${model_base}_rows_modified_raw.json"
+        echo '[]' > "$TMPDIR/models/${model_base}_rows_new_columns.json"
     elif [[ -n "$prod_schema" ]]; then
         prod_table="\`${GCP_PROJECT}\`.\`${prod_schema}\`.\`${model_base}\`"
 
@@ -486,10 +624,35 @@ for model_base in $MODEL_LIST; do
         fi
 
         fi  # end common_cols check
+
+        # Sample rows for newly added columns (PK + new columns only)
+        added_cols=$(jq -r '
+            [.[] | select(.change_type == "added") | .column] |
+            if length > 0 then map("`" + . + "`") | join(", ") else empty end
+        ' "$TMPDIR/models/${model_base}_schema_diff.json" 2>/dev/null || true)
+
+        if [[ -n "$added_cols" ]]; then
+            pk_select_cols=$(cat "$TMPDIR/models/${model_base}_pk.json" | jq -r '
+                if length > 0 then map("`" + . + "`") | join(", ") else empty end
+            ')
+            if [[ -n "$pk_select_cols" ]]; then
+                new_col_select="${pk_select_cols}, ${added_cols}"
+            else
+                new_col_select="${added_cols}"
+            fi
+            log "$model_base: sampling new column data..."
+            bq query --use_legacy_sql=false --format=json --max_rows=10 \
+                "SELECT ${new_col_select} FROM ${dev_table} LIMIT 10" 2>/dev/null \
+                > "$TMPDIR/models/${model_base}_rows_new_columns.json" \
+                || echo '[]' > "$TMPDIR/models/${model_base}_rows_new_columns.json"
+        else
+            echo '[]' > "$TMPDIR/models/${model_base}_rows_new_columns.json"
+        fi
     else
         echo '[]' > "$TMPDIR/models/${model_base}_rows_added.json"
         echo '[]' > "$TMPDIR/models/${model_base}_rows_removed.json"
         echo '[]' > "$TMPDIR/models/${model_base}_rows_modified_raw.json"
+        echo '[]' > "$TMPDIR/models/${model_base}_rows_new_columns.json"
     fi
 done
 
@@ -541,8 +704,9 @@ model_names = [f.replace(".json","") for f in os.listdir(models_dir)
                        "_dev_cols.json", "_prod_cols.json",
                        "_schema_diff.json", "_pk.json",
                        "_profile_dev.json", "_profile_prod.json",
+                       "_profiled_cols.json", "_col_filter.txt",
                        "_rows_added.json", "_rows_removed.json",
-                       "_rows_modified_raw.json"
+                       "_rows_modified_raw.json", "_rows_new_columns.json"
                    ]
                )]
 
@@ -569,12 +733,25 @@ for model_name in sorted(model_names):
     rows_added_raw = load("_rows_added.json")
     rows_removed_raw = load("_rows_removed.json")
     rows_modified_raw = load("_rows_modified_raw.json")
+    rows_new_columns_raw = load("_rows_new_columns.json")
+
+    # Load profiled columns list ("ALL" or a list of column names)
+    profiled_cols_raw = load("_profiled_cols.json", default='"ALL"')
+    if isinstance(profiled_cols_raw, str):
+        # JSON string "ALL" gets loaded as the string ALL
+        profiled_cols_set = None  # None means all columns were profiled
+    elif isinstance(profiled_cols_raw, list):
+        profiled_cols_set = set(profiled_cols_raw)
+    else:
+        profiled_cols_set = None
+
+    is_focused = profiled_cols_set is not None
 
     # Parse profiles — bq returns a list with one row
     profile_dev = profile_dev_raw[0] if profile_dev_raw else {}
     profile_prod = profile_prod_raw[0] if profile_prod_raw else {}
 
-    # Row counts
+    # Row counts (always available — COUNT(*) is in every profile query)
     dev_row_count = int(profile_dev.get("_row_count", 0))
     prod_row_count = int(profile_prod.get("_row_count", 0)) if not is_new else None
 
@@ -607,13 +784,8 @@ for model_name in sorted(model_names):
         is_pk = cname in pk
         is_schema_add = cname in schema_additions
 
-        # Extract dev profile values
-        dev_distinct = int(profile_dev.get(f"{safe}__distinct", 0))
-        dev_nulls = int(profile_dev.get(f"{safe}__nulls", 0))
-        dev_null_pct = round(dev_nulls / dev_row_count * 100, 2) if dev_row_count else 0
-        dev_min = profile_dev.get(f"{safe}__min")
-        dev_max = profile_dev.get(f"{safe}__max")
-        dev_mean = profile_dev.get(f"{safe}__mean")
+        # Was this column profiled? (focused mode skips unchanged columns)
+        was_profiled = profiled_cols_set is None or cname in profiled_cols_set
 
         # Convert numeric strings
         def to_num(v):
@@ -621,18 +793,29 @@ for model_name in sorted(model_names):
             try: return float(v)
             except: return v
 
-        dev_profile = {
-            "distinct_count": dev_distinct,
-            "null_count": dev_nulls,
-            "null_pct": dev_null_pct,
-            "min": to_num(dev_min),
-            "max": to_num(dev_max),
-            "mean": to_num(dev_mean)
-        }
+        if was_profiled:
+            # Extract dev profile values
+            dev_distinct = int(profile_dev.get(f"{safe}__distinct", 0))
+            dev_nulls = int(profile_dev.get(f"{safe}__nulls", 0))
+            dev_null_pct = round(dev_nulls / dev_row_count * 100, 2) if dev_row_count else 0
+            dev_min = profile_dev.get(f"{safe}__min")
+            dev_max = profile_dev.get(f"{safe}__max")
+            dev_mean = profile_dev.get(f"{safe}__mean")
+
+            dev_profile = {
+                "distinct_count": dev_distinct,
+                "null_count": dev_nulls,
+                "null_pct": dev_null_pct,
+                "min": to_num(dev_min),
+                "max": to_num(dev_max),
+                "mean": to_num(dev_mean)
+            }
+        else:
+            dev_profile = None  # Not profiled — rendered as "—" in HTML
 
         # Extract prod profile values (if not new and column exists in prod)
         prod_profile = None
-        if not is_new and not is_schema_add and cname in prod_col_map:
+        if not is_new and not is_schema_add and cname in prod_col_map and was_profiled:
             prod_distinct = int(profile_prod.get(f"{safe}__distinct", 0))
             prod_nulls = int(profile_prod.get(f"{safe}__nulls", 0))
             prod_null_pct = round(prod_nulls / prod_row_count * 100, 2) if prod_row_count else 0
@@ -651,7 +834,7 @@ for model_name in sorted(model_names):
 
         # Determine if data changed
         is_changed = False
-        if prod_profile and not is_schema_add:
+        if prod_profile and dev_profile and not is_schema_add:
             if (prod_profile["distinct_count"] != dev_profile["distinct_count"] or
                 prod_profile["null_pct"] != dev_profile["null_pct"] or
                 prod_profile["min"] != dev_profile["min"] or
@@ -663,7 +846,7 @@ for model_name in sorted(model_names):
             is_changed = True
 
         # Check for null% spikes (risk indicator)
-        if prod_profile and not is_schema_add:
+        if prod_profile and dev_profile and not is_schema_add:
             null_delta = dev_profile["null_pct"] - prod_profile["null_pct"]
             if abs(null_delta) > 5:
                 risk_indicators.append({
@@ -677,6 +860,7 @@ for model_name in sorted(model_names):
             "data_type": ctype,
             "is_primary_key": is_pk,
             "is_changed": is_changed,
+            "is_profiled": was_profiled,
             "prod": prod_profile,
             "dev": dev_profile
         }
@@ -737,8 +921,13 @@ for model_name in sorted(model_names):
     sample_rows = {
         "added": rows_added,
         "removed": rows_removed,
-        "modified": rows_modified
+        "modified": rows_modified,
+        "new_columns": rows_new_columns_raw or []
     }
+
+    # Profiling summary
+    profiled_count = sum(1 for c in column_profiles if c.get("is_profiled", True))
+    total_cols = len(column_profiles)
 
     model_obj = {
         "name": model_name,
@@ -758,7 +947,12 @@ for model_name in sorted(model_names):
         "schema_changes": schema_diff,
         "code_changes": code_changes,
         "column_profiles": column_profiles,
-        "sample_rows": sample_rows
+        "sample_rows": sample_rows,
+        "profiling": {
+            "mode": "focused" if is_focused else "full",
+            "profiled_columns": profiled_count,
+            "total_columns": total_cols
+        }
     }
     models.append(model_obj)
 

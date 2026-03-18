@@ -563,6 +563,36 @@ h1 {
 .profile-table tr.row-new:hover {
   background: rgba(5, 150, 105, 0.1);
 }
+.profile-table tr.row-skipped {
+  opacity: 0.4;
+}
+.profile-table tr.row-skipped td {
+  font-style: italic;
+}
+
+/* Focused profiling banner */
+.profiling-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 6px;
+  background: var(--surface-recessed);
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.profiling-banner .badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--teal);
+  color: var(--bg);
+}
 
 /* Inline delta */
 .delta {
@@ -982,10 +1012,21 @@ function renderModel(model, sectionIdx, animIdx) {
   // Column profile table
   const cols = model.column_profiles;
   const isNew = model.is_new;
+  const profiling = model.profiling || { mode: 'full' };
   const hasNumeric = cols.some(c => {
     const d = c.dev || c.prod;
     return d && (d.min != null || d.max != null || d.mean != null);
   });
+
+  // Focused profiling banner
+  if (profiling.mode === 'focused') {
+    html += `<div class="profiling-banner">`;
+    html += `<span class="badge">Focused</span>`;
+    html += `Profiled ${profiling.profiled_columns} of ${profiling.total_columns} columns `;
+    html += `(only changed/added). Row comparison still covers all columns.`;
+    html += ` <span style="opacity:0.6">Re-run with <code>--full</code> for complete profiling.</span>`;
+    html += `</div>`;
+  }
 
   html += `<div class="profile-wrap">`;
   html += `<div class="profile-scroll">`;
@@ -1004,18 +1045,23 @@ function renderModel(model, sectionIdx, animIdx) {
   html += `</tr></thead>`;
   html += `<tbody>`;
 
+  const na = '<span class="cell-na">—</span>';
+
   cols.forEach((col, ci) => {
     const p = col.prod || {};
     const d = col.dev || {};
+    const isProfiled = col.is_profiled !== false;  // default true for backwards compat
     let rowCls = '';
-    if (col.is_schema_addition) rowCls = 'row-new';
+    if (!isProfiled) rowCls = 'row-skipped';
+    else if (col.is_schema_addition) rowCls = 'row-new';
     else if (col.is_changed) rowCls = 'row-changed';
 
     // Status dot
     let dotCls = 'status-dot--same';
     let dotTitle = 'Unchanged';
-    if (col.is_primary_key) { dotCls = 'status-dot--pk'; dotTitle = 'Primary Key'; }
-    if (col.is_schema_addition) { dotCls = 'status-dot--added'; dotTitle = 'New Column'; }
+    if (!isProfiled) { dotCls = 'status-dot--same'; dotTitle = 'Not profiled (unchanged)'; }
+    else if (col.is_primary_key) { dotCls = 'status-dot--pk'; dotTitle = 'Primary Key'; }
+    else if (col.is_schema_addition) { dotCls = 'status-dot--added'; dotTitle = 'New Column'; }
     else if (col.is_changed) { dotCls = 'status-dot--changed'; dotTitle = 'Data Changed'; }
 
     html += `<tr class="${rowCls}" style="--i:${ci}">`;
@@ -1023,21 +1069,30 @@ function renderModel(model, sectionIdx, animIdx) {
     html += `<td class="col-name">${esc(col.column)}${col.is_primary_key ? ' 🔑' : ''}</td>`;
     html += `<td><code style="font-size:10px;color:var(--text-dim)">${esc(col.data_type)}</code></td>`;
 
-    if (isNew) {
+    if (!isProfiled) {
+      // Not profiled — show dashes
+      html += `<td class="num">${na}</td>`;
+      html += `<td class="num">${na}</td>`;
+      if (hasNumeric) {
+        html += `<td class="num">${na}</td>`;
+        html += `<td class="num">${na}</td>`;
+        html += `<td class="num">${na}</td>`;
+      }
+    } else if (isNew) {
       html += `<td class="num">${fmt(d.distinct_count)}</td>`;
       html += `<td class="num">${fmtPct(d.null_pct)}</td>`;
       if (hasNumeric) {
-        html += `<td class="num">${d.min != null ? fmt(d.min, 2) : '<span class="cell-na">—</span>'}</td>`;
-        html += `<td class="num">${d.max != null ? fmt(d.max, 2) : '<span class="cell-na">—</span>'}</td>`;
-        html += `<td class="num">${d.mean != null ? fmt(d.mean, 2) : '<span class="cell-na">—</span>'}</td>`;
+        html += `<td class="num">${d.min != null ? fmt(d.min, 2) : na}</td>`;
+        html += `<td class="num">${d.max != null ? fmt(d.max, 2) : na}</td>`;
+        html += `<td class="num">${d.mean != null ? fmt(d.mean, 2) : na}</td>`;
       }
     } else if (col.is_schema_addition) {
       html += `<td class="num">${fmt(d.distinct_count)}</td>`;
       html += `<td class="num">${fmtPct(d.null_pct)}</td>`;
       if (hasNumeric) {
-        html += `<td class="num">${d.min != null ? fmt(d.min, 2) : '<span class="cell-na">—</span>'}</td>`;
-        html += `<td class="num">${d.max != null ? fmt(d.max, 2) : '<span class="cell-na">—</span>'}</td>`;
-        html += `<td class="num">${d.mean != null ? fmt(d.mean, 2) : '<span class="cell-na">—</span>'}</td>`;
+        html += `<td class="num">${d.min != null ? fmt(d.min, 2) : na}</td>`;
+        html += `<td class="num">${d.max != null ? fmt(d.max, 2) : na}</td>`;
+        html += `<td class="num">${d.mean != null ? fmt(d.mean, 2) : na}</td>`;
       }
     } else {
       html += `<td class="num">${profileCellPair(p.distinct_count, d.distinct_count)}</td>`;
@@ -1056,14 +1111,19 @@ function renderModel(model, sectionIdx, animIdx) {
 
   // Sample rows
   const sr = model.sample_rows;
-  const totalSamples = sr.added.length + sr.removed.length + sr.modified.length;
+  const newColSamples = sr.new_columns || [];
+  const totalSamples = sr.added.length + sr.removed.length + sr.modified.length + newColSamples.length;
   if (totalSamples > 0) {
     html += `<details class="samples">`;
     html += `<summary>Sample Rows · ${totalSamples} shown</summary>`;
     html += `<div class="samples__body">`;
 
     if (sr.added.length > 0) {
-      html += `<div class="samples__label" style="color:var(--green)">+ Added (${sr.added.length})</div>`;
+      if (model.is_new && model.row_count.dev) {
+        html += `<div class="samples__label" style="color:var(--green)">Sample of ${sr.added.length} from ${fmt(model.row_count.dev)} new rows</div>`;
+      } else {
+        html += `<div class="samples__label" style="color:var(--green)">+ Added (${sr.added.length})</div>`;
+      }
       html += renderSampleTable(sr.added);
     }
 
@@ -1075,6 +1135,17 @@ function renderModel(model, sectionIdx, animIdx) {
     if (sr.modified.length > 0) {
       html += `<div class="samples__label" style="color:var(--amber)">~ Modified (${sr.modified.length})</div>`;
       html += renderModifiedTable(sr.modified);
+    }
+
+    if (newColSamples.length > 0) {
+      const addedColNames = (model.schema_changes || [])
+        .filter(sc => sc.change_type === 'added')
+        .map(sc => sc.column);
+      const colLabel = addedColNames.length > 0
+        ? addedColNames.map(c => `<code>${esc(c)}</code>`).join(', ')
+        : 'new columns';
+      html += `<div class="samples__label" style="color:var(--teal)">★ New column data — ${colLabel} (${newColSamples.length} rows)</div>`;
+      html += renderSampleTable(newColSamples);
     }
 
     html += `</div></details>`;
